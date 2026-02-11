@@ -1,39 +1,40 @@
-# DDD Tachograph Reader
+# 🚛 DDD Tachograph Reader
 
-Un semplice lettore di file DDD per tachigrafo digitale, basato sulla libreria `tachoparser`.
+Un analizzatore moderno e veloce per file `.ddd` (Tachigrafo Digitale), progettato per estrarre informazioni su veicoli, conducenti e cronologia dei viaggi.
 
-## Caratteristiche
-- Supporta file DDD di 1ª e 2ª generazione.
-- Parsing dei dati del veicolo e della carta conducente.
-- Output in formato JSON per una facile integrazione.
+## ✨ Caratteristiche
+- **Analisi Multi-Generazione**: Supporta file G1 (Digital) e G2 (Smart Tachograph).
+- **Estrazione Dati Mezzo**: Recupero automatico di VIN (Telaio) e Targa.
+- **Cronologia Viaggi**: Tabella dettagliata con date, orari di inizio/fine e chilometraggi.
+- **Interfaccia Moderna**: GUI in Dark Mode basata su CustomTkinter.
+- **Portable**: Disponibile come file eseguibile (.exe) per Windows.
 
-## Installazione
+## 🚀 Utilizzo Rapido
 
-Assicurati di avere Python 3 installato, quindi installa le dipendenze:
+### GUI (Consigliata)
+Scarica l'ultimo eseguibile dalla sezione **Releases** o **Actions** di questo repository ed esegui `DDD-Reader.exe`.
 
+### Riga di Comando
+Se preferisci usare Python direttamente:
 ```bash
 pip install -r requirements.txt
-```
-
-## Utilizzo
-
-Per leggere un file DDD tramite interfaccia grafica:
-
-```bash
-python gui.py
-```
-
-Per leggere un file DDD tramite riga di comando:
-
-```bash
 python main.py percorso/del/file.ddd
 ```
 
-Per salvare il risultato in un file JSON:
+## 🛠️ Requisiti (per sviluppatori)
+- Python 3.10+
+- `customtkinter`
+- `pyinstaller` (per compilare l'eseguibile)
 
+## 🏗️ Build Personale
+Per creare il tuo file eseguibile locale:
 ```bash
-python main.py percorso/del/file.ddd -o output.json
+pyinstaller --noconfirm --onefile --windowed --name "DDD-Reader" --add-data "venv/Lib/site-packages/customtkinter;customtkinter" gui.py
 ```
+*(Nota: il percorso di `customtkinter` potrebbe variare in base al tuo ambiente).*
 
-## Crediti
-Questo progetto utilizza la libreria [tachoparser](https://github.com/traconiq/tachoparser) di traconiq.
+## ⚖️ Licenza
+Distribuito sotto licenza MIT. Vedere `LICENSE` per ulteriori informazioni.
+
+---
+*Sviluppato con ✨ da Aurora per Simone Rondina.*

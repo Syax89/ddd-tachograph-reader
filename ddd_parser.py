@@ -1,159 +1,109 @@
 import struct
 import os
+import re
+import json
 from datetime import datetime, timezone
 
-class DDDDecoder:
-    @staticmethod
-    def time_real(b):
-        if len(b) < 4: return None
-        ts = struct.unpack(">I", b[:4])[0]
-        if ts == 0 or ts == 0xFFFFFFFF: return None
-        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-
-    @staticmethod
-    def string(b):
-        return b.decode('latin-1', errors='ignore').strip()
-
-    @staticmethod
-    def card_number(b):
-        if len(b) < 16: return None
-        return b[:16].decode('latin-1', errors='ignore').strip()
-
-    @staticmethod
-    def vehicle_registration(b):
-        if len(b) < 14: return {}
-        return {
-            "nation": hex(b[0]),
-            "vrm": b[1:14].decode('latin-1', errors='ignore').strip()
-        }
-
-class DDDParser:
-    # Mappa completa dei Tag Annex 1B (G1 e G2)
-    TAGS = {
-        # File Conducente
-        0x0002: ("Card ICC Identification", "decode_icc"),
-        0x0005: ("Driver Card Holder Identification", "decode_driver_names"),
-        0x0201: ("Driver Card Identification", "decode_card_id"),
-        0x0202: ("Card Download", "decode_generic"),
-        0x0203: ("Driving Licence Information", "decode_licence"),
-        0x0204: ("Events Data", "decode_generic"),
-        0x0205: ("Faults Data", "decode_generic"),
-        0x0206: ("Driver Activity Data", "decode_activity"),
-        0x0207: ("Vehicles Used Data", "decode_vehicles_used"),
-        0x0208: ("Places Data", "decode_generic"),
-        0x0209: ("Current Usage Data", "decode_generic"),
-        0x020A: ("Control Activity Data", "decode_generic"),
-        0x020B: ("Specific Conditions Data", "decode_generic"),
-        
-        # File Veicolo (VU)
-        0x0014: ("Vehicle Unit Identification", "decode_vu_id"),
-        0x0015: ("Vehicle Unit Calibration", "decode_generic"),
-        0x0016: ("Vehicle Unit Events", "decode_generic"),
-        0x0017: ("Vehicle Unit Faults", "decode_generic"),
-        0x0018: ("Vehicle Unit Activity", "decode_generic"),
-        0x0019: ("Vehicle Unit Speed", "decode_generic"),
-        0x001A: ("Vehicle Unit Places", "decode_generic"),
-    }
-
+class TachoParser:
+    """
+    Motore di analisi professionale per file Tachigrafo (.DDD).
+    Supporta Generazione 1 (Digital) e Generazione 2 (Smart).
+    """
+    
     def __init__(self, file_path):
         self.file_path = file_path
+        self.raw_data = None
+        self.content_latin = ""
         self.results = {
-            "filename": os.path.basename(file_path),
-            "parsed_at": datetime.now().isoformat(),
-            "generation": "Unknown",
-            "data": {}
+            "metadata": {
+                "filename": os.path.basename(file_path),
+                "generation": "Unknown",
+                "parsed_at": datetime.now().isoformat()
+            },
+            "vehicle": {
+                "vin": "Non rilevato",
+                "plate": "Non rilevata",
+            },
+            "driver": {
+                "card_number": "Non rilevato",
+                "names": [],
+            },
+            "trips": []
         }
 
-    def decode_generic(self, b):
-        return {"raw_size": len(b), "hex_preview": b[:16].hex().upper()}
+    def _load_file(self):
+        if not os.path.exists(self.file_path):
+            return False
+        with open(self.file_path, 'rb') as f:
+            self.raw_data = f.read()
+        self.content_latin = self.raw_data.decode('latin-1', errors='ignore')
+        return True
 
-    def decode_icc(self, b):
-        return {
-            "clock_stop": hex(b[0]) if len(b) > 0 else None,
-            "card_extended_serial": b[1:9].hex().upper() if len(b) > 8 else None,
-            "card_approval_number": DDDDecoder.string(b[9:17]) if len(b) > 16 else None
-        }
+    def _detect_generation(self):
+        if self.raw_data.startswith(b'\x76\x21'):
+            self.results["metadata"]["generation"] = "G2 (Smart Tachograph)"
+        else:
+            self.results["metadata"]["generation"] = "G1 (Digital Tachograph)"
 
-    def decode_driver_names(self, b):
-        if len(b) < 78: return {}
-        return {
-            "surname": DDDDecoder.string(b[0:36]),
-            "first_names": DDDDecoder.string(b[36:72]),
-            "birth_date": DDDDecoder.time_real(b[72:76]),
-            "preferred_language": DDDDecoder.string(b[76:78])
-        }
+    def _extract_basic_info(self):
+        # VIN (17 caratteri)
+        vin_match = re.search(r'[A-Z0-9]{17}', self.content_latin)
+        if vin_match:
+            self.results["vehicle"]["vin"] = vin_match.group(0)
+            
+        # Numero Carta (Pattern I + numeri)
+        card_match = re.search(r'[A-Z][0-9]{14,16}', self.content_latin)
+        if card_match:
+            self.results["driver"]["card_number"] = card_match.group(0)
 
-    def decode_card_id(self, b):
-        if len(b) < 60: return {}
-        return {
-            "card_number": DDDDecoder.card_number(b[1:17]),
-            "issuing_state": hex(b[0]),
-            "issue_date": DDDDecoder.time_real(b[25:29]),
-            "expiry_date": DDDDecoder.time_real(b[33:37])
-        }
+        # Targa (Heuristic)
+        vrm_match = re.search(r'[A-Z]{2}[0-9]{3}[A-Z]{2}', self.content_latin)
+        if vrm_match:
+            self.results["vehicle"]["plate"] = vrm_match.group(0)
 
-    def decode_licence(self, b):
-        if len(b) < 50: return {}
-        return {
-            "licence_number": DDDDecoder.string(b[2:18]),
-            "issuing_state": hex(b[0])
-        }
-
-    def decode_vu_id(self, b):
-        if len(b) < 80: return {}
-        return {
-            "manufacturer": DDDDecoder.string(b[0:36]),
-            "vin": DDDDecoder.string(b[36:53]),
-            "vrm": DDDDecoder.string(b[53:68])
-        }
-
-    def decode_vehicles_used(self, b):
-        # Ogni record è circa 31 byte
-        vehicles = []
-        for i in range(0, len(b), 31):
-            chunk = b[i:i+31]
-            if len(chunk) < 31: break
-            vehicles.append({
-                "first_use": DDDDecoder.time_real(chunk[0:4]),
-                "last_use": DDDDecoder.time_real(chunk[4:8]),
-                "vrm": DDDDecoder.string(chunk[8:21])
-            })
-        return vehicles
-
-    def decode_activity(self, b):
-        # Analisi periodi di attività
-        return {"raw_size": len(b), "info": "Dati attività giornaliere rilevati"}
+    def _extract_trips(self):
+        """Estrae la cronologia dei viaggi dai record di utilizzo veicolo."""
+        trips_seen = set()
+        # Scansione record da 29 byte (Struttura: TS1(4), TS2(4), Nation(1), Plate(13), OdoStart(3), OdoEnd(3))
+        for i in range(len(self.raw_data) - 29):
+            try:
+                ts1, ts2 = struct.unpack(">II", self.raw_data[i:i+8])
+                # Filtro date plausibili (2020 - 2030)
+                if 1577836800 < ts1 < 1893456000 and 1577836800 < ts2 < 1893456000 and ts2 >= ts1:
+                    plate = self.raw_data[i+9 : i+22].decode('latin-1', errors='ignore').strip()
+                    if re.match(r'[A-Z0-9]{5,10}', plate):
+                        km_start = int.from_bytes(self.raw_data[i+23:i+26], 'big')
+                        km_end = int.from_bytes(self.raw_data[i+26:i+29], 'big')
+                        
+                        if 0 < km_start < 1000000 and 0 < km_end < 1000000 and km_end >= km_start:
+                            trip_id = (ts1, ts2, plate, km_start)
+                            if trip_id not in trips_seen:
+                                self.results["trips"].append({
+                                    "data": datetime.fromtimestamp(ts1, tz=timezone.utc).strftime('%d/%m/%Y'),
+                                    "inizio": datetime.fromtimestamp(ts1, tz=timezone.utc).strftime('%H:%M'),
+                                    "fine": datetime.fromtimestamp(ts2, tz=timezone.utc).strftime('%H:%M'),
+                                    "targa": plate,
+                                    "km_inizio": km_start,
+                                    "km_fine": km_end,
+                                    "distanza": km_end - km_start
+                                })
+                                trips_seen.add(trip_id)
+            except:
+                continue
+        
+        # Ordina per data decrescente
+        self.results["trips"].sort(key=lambda x: (x["data"], x["inizio"]), reverse=True)
 
     def parse(self):
-        if not os.path.exists(self.file_path): return None
-        with open(self.file_path, 'rb') as f:
-            data = f.read()
-        
-        # Rilevamento Generazione (Heuristic)
-        if data.startswith(b'\x76\x21'):
-            self.results["generation"] = "G2 (Smart Tachograph)"
-        else:
-            self.results["generation"] = "G1 (Digital Tachograph)"
-
-        offset = 0
-        while offset < len(data) - 4:
-            tag = struct.unpack_from(">H", data, offset)[0]
-            if tag in self.TAGS:
-                name, decoder_name = self.TAGS[tag]
-                
-                # Prova decodifica lunghezza (Annex 1B G1/G2 varia leggermente)
-                length = struct.unpack_from(">H", data, offset + 3)[0]
-                
-                if length > 0 and (offset + 5 + length) <= len(data):
-                    section_data = data[offset + 5 : offset + 5 + length]
-                    decoder = getattr(self, decoder_name, self.decode_generic)
-                    self.results["data"][name] = decoder(section_data)
-                    offset += 5 + length
-                    continue
-            offset += 1
+        if not self._load_file():
+            return None
+        self._detect_generation()
+        self._extract_basic_info()
+        self._extract_trips()
         return self.results
 
 if __name__ == "__main__":
-    import sys, json
+    import sys
     if len(sys.argv) > 1:
-        print(json.dumps(DDDParser(sys.argv[1]).parse(), indent=2))
+        parser = TachoParser(sys.argv[1])
+        print(json.dumps(parser.parse(), indent=2, ensure_ascii=False))
