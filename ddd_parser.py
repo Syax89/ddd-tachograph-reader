@@ -2,99 +2,60 @@ import struct
 import os
 
 class DDDParser:
-    """
-    Parser minimale per file DDD (Tachigrafo Digitale).
-    Basato sulle specifiche Annex 1B / ISO 16844-7.
-    """
-    
     TAGS = {
-        0x0001: "Card ICC Identification",
-        0x0002: "Card Chip Identification",
+        0x0002: "Card ICC Identification",
         0x0005: "Driver Card Holder Identification",
         0x0006: "Card Application Identification",
-        0x0007: "Card Certificate",
-        0x0008: "Member State Certificate",
-        0x0009: "Card Identification",
-        0x000A: "Card Download",
-        0x000B: "Driving Licence Information",
-        0x000C: "Events Data",
-        0x000D: "Faults Data",
-        0x000E: "Driver Activity Data",
-        0x000F: "Vehicles Used Data",
-        0x0010: "Places Data",
-        0x0011: "Current Usage Data",
-        0x0012: "Control Activity Data",
-        0x0013: "Specific Conditions Data",
-        0x0014: "Vehicle Unit Identification",
-        0x0015: "Vehicle Unit Calibration",
-        0x0016: "Vehicle Unit Events",
-        0x0017: "Vehicle Unit Faults",
-        0x0018: "Vehicle Unit Activity",
-        0x0019: "Vehicle Unit Speed",
-        0x001A: "Vehicle Unit Places",
+        0x0201: "Driver Card Identification",
+        0x0202: "Card Download",
+        0x0203: "Driving Licence Information",
+        0x0204: "Events Data",
+        0x0205: "Faults Data",
+        0x0206: "Driver Activity Data",
+        0x0207: "Vehicles Used Data",
+        0x0208: "Places Data",
+        0x0209: "Current Usage Data",
+        0x020A: "Control Activity Data",
+        0x020B: "Specific Conditions Data",
     }
 
     def __init__(self, file_path):
         self.file_path = file_path
-        self.data = None
-        self.results = {
-            "filename": os.path.basename(file_path),
-            "file_size": 0,
-            "sections": []
-        }
+        self.results = {"filename": os.path.basename(file_path), "sections": []}
 
     def parse(self):
-        if not os.path.exists(self.file_path):
-            return None
-            
+        if not os.path.exists(self.file_path): return None
         with open(self.file_path, 'rb') as f:
-            self.data = f.read()
-            self.results["file_size"] = len(self.data)
-
+            data = f.read()
+        
         offset = 0
-        while offset < len(self.data) - 3:
-            try:
-                # Struttura TLV (Tag-Length-Value)
-                # In molti file DDD, il tag è 2 byte e la lunghezza è 2 byte
-                tag = struct.unpack_from(">H", self.data, offset)[0]
-                length = struct.unpack_from(">H", self.data, offset + 2)[0]
+        while offset < len(data) - 4:
+            # Cerchiamo i tag noti
+            tag = struct.unpack_from(">H", data, offset)[0]
+            if tag in self.TAGS:
+                # In G1, dopo il tag c'è spesso un byte 00 o 01 e poi la lunghezza
+                # Proviamo a vedere se a offset+3 o offset+2 c'è la lunghezza
+                length = struct.unpack_from(">H", data, offset + 3)[0]
                 
-                if length > (len(self.data) - offset - 4) or length == 0:
-                    # Se la lunghezza è sospetta, proviamo a saltare di 1
-                    offset += 1
+                # Se la lunghezza sembra valida
+                if length > 0 and (offset + 5 + length) <= len(data):
+                    section_data = data[offset + 5 : offset + 5 + length]
+                    info = {
+                        "tag": hex(tag),
+                        "name": self.TAGS[tag],
+                        "length": length,
+                        "offset": offset
+                    }
+                    if tag == 0x0005: # Driver Identification
+                        info["details"] = {"raw_name": section_data[1:36].decode('latin-1', errors='ignore').strip()}
+                    
+                    self.results["sections"].append(info)
+                    offset += 5 + length
                     continue
-                
-                section_name = self.TAGS.get(tag, f"Unknown Tag ({hex(tag)})")
-                
-                # Estrazione dati grezzi (per ora solo info base)
-                section_data = self.data[offset + 4 : offset + 4 + length]
-                
-                info = {
-                    "tag": hex(tag),
-                    "name": section_name,
-                    "length": length,
-                    "offset": offset
-                }
-                
-                # Esempio: Estrazione nome se è DriverCardHolderIdentification
-                if tag == 0x0005:
-                    try:
-                        # Il nome inizia solitamente dopo alcuni byte di header
-                        name_raw = section_data[1:36].decode('latin-1').strip()
-                        info["details"] = {"driver_name": name_raw}
-                    except:
-                        pass
-
-                self.results["sections"].append(info)
-                offset += 4 + length
-                
-            except Exception:
-                offset += 1
-                
+            offset += 1
         return self.results
 
 if __name__ == "__main__":
-    import sys
+    import sys, json
     if len(sys.argv) > 1:
-        parser = DDDParser(sys.argv[1])
-        print(parser.parse())
+        print(json.dumps(DDDParser(sys.argv[1]).parse(), indent=2))
