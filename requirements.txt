@@ -1,3 +1,2 @@
-tachoparser @ git+https://github.com/traconiq/tachoparser.git
 customtkinter
 pyinstaller
