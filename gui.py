@@ -2,7 +2,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
 import json
 import os
-from ddd_parser import TachoParser
+from ddd_parser import DDDParser
 
 # Impostazioni Tema Aurora ✨
 ctk.set_appearance_mode("Dark")
@@ -70,7 +70,7 @@ class App(ctk.CTk):
     def open_file(self):
         path = filedialog.askopenfilename(filetypes=[("DDD Files", "*.ddd"), ("All Files", "*.*")])
         if path:
-            parser = TachoParser(path)
+            parser = DDDParser(path)
             data = parser.parse()
             if data:
                 self.current_data = data
