@@ -2,6 +2,7 @@ import struct
 import os
 import json
 from datetime import datetime, timezone
+from signature_validator import SignatureValidator
 
 class TachoParser:
     """
@@ -33,11 +34,13 @@ class TachoParser:
     def __init__(self, file_path):
         self.file_path = file_path
         self.raw_data = None
+        self.validator = SignatureValidator()
         self.results = {
             "metadata": {
                 "filename": os.path.basename(file_path),
                 "generation": "Unknown",
-                "parsed_at": datetime.now().isoformat()
+                "parsed_at": datetime.now().isoformat(),
+                "integrity_check": "Pending"
             },
             "driver": {"card_number": "N/A"},
             "vehicle": {"vin": "N/A", "plate": "N/A"},
@@ -154,6 +157,15 @@ class TachoParser:
 
                     elif tag == 0x0506: # EF_Driver_Activity_Data
                         self._parse_activities(val, length)
+
+                    # Signature Validation Integration
+                    if tag in [0x0501, 0x0201]: # Certs and G2 Idents often contain signatures
+                        # Placeholder for signature extraction logic
+                        # In a real DDD, the signature follows the data block or is in a specific TLV
+                        is_valid = self.validator.validate_block(val, None, None, 
+                                                               algorithm='ECDSA' if is_g2 else 'RSA')
+                        if is_valid:
+                            self.results["metadata"]["integrity_check"] = "Verified"
 
                     pos += 5 + length
                     continue

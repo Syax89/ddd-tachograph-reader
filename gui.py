@@ -2,7 +2,8 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
 import json
 import os
-from ddd_parser import DDDParser
+from ddd_parser import TachoParser
+from compliance_engine import ComplianceEngine
 
 # Impostazioni Tema Aurora ✨
 ctk.set_appearance_mode("Dark")
@@ -32,7 +33,7 @@ class App(ctk.CTk):
         self.export_button = ctk.CTkButton(self.sidebar_frame, text="Esporta JSON", command=self.export_json, state="disabled", fg_color="transparent", border_width=1)
         self.export_button.grid(row=2, column=0, padx=20, pady=10)
 
-        self.info_box = ctk.CTkTextbox(self.sidebar_frame, width=180, height=200, font=ctk.CTkFont(size=12))
+        self.info_box = ctk.CTkTextbox(self.sidebar_frame, width=180, height=300, font=ctk.CTkFont(size=12))
         self.info_box.grid(row=3, column=0, padx=20, pady=20)
         self.info_box.insert("0.0", "INFO MEZZO:\n\nIn attesa di file...")
 
@@ -70,9 +71,11 @@ class App(ctk.CTk):
     def open_file(self):
         path = filedialog.askopenfilename(filetypes=[("DDD Files", "*.ddd"), ("All Files", "*.*")])
         if path:
-            parser = DDDParser(path)
+            parser = TachoParser(path)
             data = parser.parse()
             if data:
+                engine = ComplianceEngine()
+                data["infractions"] = engine.analyze(data.get("activities", []))
                 self.current_data = data
                 self.update_ui(data)
                 messagebox.showinfo("Completato", f"Analisi di {os.path.basename(path)} completata!")
@@ -86,18 +89,37 @@ class App(ctk.CTk):
         info_text += f"VIN: {data['vehicle']['vin']}\n"
         info_text += f"TARGA: {data['vehicle']['plate']}\n"
         info_text += f"CARTA: {data['driver']['card_number']}\n"
+        
+        infractions = data.get("infractions", [])
+        if infractions:
+            info_text += f"\n--- INFRAZIONI ({len(infractions)}) ---\n"
+            for inf in infractions:
+                info_text += f"• {inf['data']}: {inf['tipo']}\n"
+        else:
+            info_text += "\nNessuna infrazione rilevata ✅"
+            
         self.info_box.insert("0.0", info_text)
 
         # Clear and Update Table
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        for trip in data['trips']:
-            self.tree.insert("", "end", values=(
-                trip['data'], trip['inizio'], trip['fine'], 
-                trip['targa'], trip['km_inizio'], trip['km_fine'], 
-                f"{trip['distanza']} km"
-            ))
+        # Note: 'trips' might not be in the current TachoParser output format, 
+        # TachoParser uses 'activities'. If we want to keep the table, 
+        # we should map activities to table rows or update the table columns.
+        # For now, let's just make sure it doesn't crash.
+        if 'trips' in data:
+            for trip in data['trips']:
+                self.tree.insert("", "end", values=(
+                    trip['data'], trip['inizio'], trip['fine'], 
+                    trip['targa'], trip['km_inizio'], trip['km_fine'], 
+                    f"{trip['distanza']} km"
+                ))
+        elif 'activities' in data:
+            for day in data['activities']:
+                self.tree.insert("", "end", values=(
+                    day['data'], "-", "-", "-", "-", "-", f"{day['km']} km"
+                ))
         
         self.export_button.configure(state="normal")
 

@@ -24,6 +24,12 @@ def main():
     try:
         ddd = TachoParser(args.file)
         result = ddd.parse()
+        
+        # Phase 3: Compliance Engine Integration
+        from compliance_engine import ComplianceEngine
+        engine = ComplianceEngine()
+        result["infractions"] = engine.analyze(result.get("activities", []))
+        
     except Exception as e:
         print(f"Errore critico durante il parsing: {e}", file=sys.stderr)
         sys.exit(1)
