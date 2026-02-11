@@ -5,15 +5,14 @@ import argparse
 import json
 import sys
 import logging
-from ddd_parser import DDDParser
+from ddd_parser import TachoParser
 
 
 def main():
     parser = argparse.ArgumentParser(description="DDD Tachograph File Reader - Structural TLV Parser")
     parser.add_argument("file", help="Percorso del file .ddd da leggere")
     parser.add_argument("-o", "--output", help="Percorso del file JSON di output")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Output verboso (debug TLV)")
-    parser.add_argument("--tlv-dump", action="store_true", help="Mostra solo i blocchi TLV trovati")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Output verboso")
 
     args = parser.parse_args()
 
@@ -22,20 +21,16 @@ def main():
         format="%(levelname)s: %(message)s"
     )
 
-    ddd = DDDParser(args.file)
-    result = ddd.parse()
-
-    if result is None:
-        print("Errore durante il parsing del file.", file=sys.stderr)
+    try:
+        ddd = TachoParser(args.file)
+        result = ddd.parse()
+    except Exception as e:
+        print(f"Errore critico durante il parsing: {e}", file=sys.stderr)
         sys.exit(1)
 
-    if args.tlv_dump:
-        print(f"File: {args.file}")
-        print(f"Generazione: {result['metadata']['generation']}")
-        print(f"Blocchi TLV trovati: {result['metadata']['tlv_blocks_found']}")
-        for tag_info in result['metadata']['tlv_tags']:
-            print(f"  {tag_info}")
-        sys.exit(0)
+    if result is None:
+        print("Errore: Impossibile leggere il file.", file=sys.stderr)
+        sys.exit(1)
 
     output_json = json.dumps(result, indent=4, ensure_ascii=False)
 
