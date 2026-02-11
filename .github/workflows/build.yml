@@ -27,7 +27,7 @@ jobs:
         pyinstaller --noconfirm --onefile --windowed --name "DDD-Reader" --add-data "$(python -c 'import customtkinter; print(customtkinter.__path__[0])');customtkinter" gui.py
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: DDD-Reader-Windows
         path: dist/DDD-Reader.exe
