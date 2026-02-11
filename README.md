@@ -17,7 +17,13 @@ pip install -r requirements.txt
 
 ## Utilizzo
 
-Per leggere un file DDD e visualizzare il risultato a schermo:
+Per leggere un file DDD tramite interfaccia grafica:
+
+```bash
+python gui.py
+```
+
+Per leggere un file DDD tramite riga di comando:
 
 ```bash
 python main.py percorso/del/file.ddd
