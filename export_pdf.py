@@ -11,11 +11,11 @@ def generate_pdf(json_data, output_path):
     styles = getSampleStyleSheet()
     elements = []
 
-    # Titolo
-    elements.append(Paragraph("Report Analisi Tachigrafo Digitale", styles['Title']))
+    # Title
+    elements.append(Paragraph("Report Analisi Tachigrafo Digitale (v1.1.2)", styles['Title']))
     elements.append(Spacer(1, 12))
 
-    # Metadati
+    # Metadata
     meta = json_data.get("metadata", {})
     elements.append(Paragraph(f"<b>File:</b> {meta.get('filename')}", styles['Normal']))
     elements.append(Paragraph(f"<b>Generazione:</b> {meta.get('generation')}", styles['Normal']))
@@ -23,7 +23,7 @@ def generate_pdf(json_data, output_path):
     elements.append(Paragraph(f"<b>Data Analisi:</b> {meta.get('parsed_at')}", styles['Normal']))
     elements.append(Spacer(1, 12))
 
-    # Conducente e Veicolo
+    # Driver & Vehicle
     driver = json_data.get("driver", {})
     vehicle = json_data.get("vehicle", {})
     elements.append(Paragraph(f"<b>Conducente (Card):</b> {driver.get('card_number')}", styles['Normal']))
@@ -31,34 +31,56 @@ def generate_pdf(json_data, output_path):
     elements.append(Paragraph(f"<b>Veicolo (VIN):</b> {vehicle.get('vin')}", styles['Normal']))
     elements.append(Spacer(1, 18))
 
-    # Infrazioni
+    # GNSS Locations (if any)
+    locations = json_data.get("locations", [])
+    if locations:
+        elements.append(Paragraph("Posizioni GNSS Rilevate (G2/Smart)", styles['Heading2']))
+        # Show last 5 locations
+        loc_data = [["Timestamp", "Latitudine", "Longitudine", "Tipo"]]
+        for loc in locations[:10]: # Limit to first 10 for space
+            loc_data.append([loc.get("timestamp"), loc.get("latitude"), loc.get("longitude"), loc.get("type")])
+        
+        lt = Table(loc_data, colWidths=[120, 80, 80, 60])
+        lt.setStyle(TableStyle([
+            ('FONTSIZE', (0, 0), (-1, -1), 7),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+        ]))
+        elements.append(lt)
+        if len(locations) > 10:
+            elements.append(Paragraph(f"... altre {len(locations)-10} posizioni omesse nel report cartaceo.", styles['Italic']))
+        elements.append(Spacer(1, 18))
+
+    # Infractions
     elements.append(Paragraph("Infrazioni Rilevate (UE 561/2006)", styles['Heading2']))
     infractions = json_data.get("infractions", [])
     if not infractions:
         elements.append(Paragraph("Nessuna infrazione rilevata.", styles['Normal']))
     else:
-        data = [["Data", "Tipo", "Descrizione"]]
+        data = [["Data", "Gravità", "Tipo", "Descrizione"]]
         for inf in infractions:
-            data.append([inf.get("data"), inf.get("tipo"), inf.get("descrizione")])
+            severity = inf.get("severity", "SI")
+            # Color coding for severity
+            sev_p = Paragraph(f"<b>{severity}</b>", ParagraphStyle('sev', textColor=colors.red if severity=="MSI" else colors.orange if severity=="SI" else colors.black))
+            data.append([inf.get("data"), sev_p, inf.get("tipo"), inf.get("descrizione")])
         
-        t = Table(data, colWidths=[60, 150, 250])
+        t = Table(data, colWidths=[60, 40, 150, 210])
         t.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
             ('GRID', (0, 0), (-1, -1), 1, colors.black)
         ]))
         elements.append(t)
     elements.append(Spacer(1, 18))
 
-    # Attività
-    elements.append(Paragraph("Log Attività Giornaliere", styles['Heading2']))
+    # Activities (Summary for the last 7 days available)
+    elements.append(Paragraph("Riepilogo Attività Recenti", styles['Heading2']))
     activities = json_data.get("activities", [])
-    for day in activities:
+    for day in activities[:7]: # Show only last 7 days to keep PDF lean
         elements.append(Paragraph(f"Data: {day.get('data')} - Km: {day.get('km')}", styles['Heading3']))
         day_data = [["Ora", "Tipo", "Slot"]]
         for ev in day.get("eventi", []):

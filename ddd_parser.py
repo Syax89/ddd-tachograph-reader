@@ -34,7 +34,16 @@ class TachoParser:
             },
             "driver": {"card_number": "N/A"},
             "vehicle": {"vin": "N/A", "plate": "N/A"},
-            "activities": []
+            "activities": [],
+            "locations": []
+        }
+        self.TAGS = {
+            0x0504: "CardActivityDailyRecord",
+            0x0506: "CardActivityDailyRecord",
+            0x0524: "CardActivityDailyRecord (G2)",
+            0x0206: "VUActivityDailyRecord",
+            0x0222: "EF_GNSS_Places",
+            0x0223: "EF_GNSS_Accumulated_Position"
         }
 
     def _decode_string(self, data):
@@ -252,6 +261,39 @@ class TachoParser:
                 seen.add(key)
                 self.results["activities"].append(run)
 
+    def _parse_gnss(self, val, tag):
+        """Decode GNSS records (Annex 1C)."""
+        # EF_GNSS_Places (0x0222): 12 bytes records
+        # EF_GNSS_Accumulated_Position (0x0223): 11 bytes records
+        rec_size = 12 if tag == 0x0222 else 11
+        
+        for i in range(0, len(val) - rec_size + 1, rec_size):
+            chunk = val[i:i+rec_size]
+            ts = struct.unpack(">I", chunk[0:4])[0]
+            
+            # Skip invalid timestamps
+            if not (1262304000 < ts < 1893456000): continue
+            
+            # GeoCoordinates: 3 bytes Lat, 3 bytes Long (signed 24-bit, 1/10 arc-seconds)
+            lat_raw = chunk[5:8]
+            lon_raw = chunk[8:11]
+            
+            lat_val = int.from_bytes(lat_raw, byteorder='big', signed=True)
+            lon_val = int.from_bytes(lon_raw, byteorder='big', signed=True)
+            
+            lat = lat_val / (10.0 * 3600.0)
+            lon = lon_val / (10.0 * 3600.0)
+            
+            # Validation: Lat -90..90, Lon -180..180
+            if abs(lat) > 90 or abs(lon) > 180: continue
+            
+            self.results["locations"].append({
+                "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                "latitude": round(lat, 6),
+                "longitude": round(lon, 6),
+                "type": "Place" if tag == 0x0222 else "Accumulated"
+            })
+
     def parse(self):
         if not os.path.exists(self.file_path): return None
         with open(self.file_path, 'rb') as f:
@@ -278,10 +320,13 @@ class TachoParser:
 
                 val = self.raw_data[pos+5 : pos+5+length]
                 
-                # Try cyclic buffer parsing on large data blocks
+                # Data extraction based on tags
                 if tag in [0x0504, 0x0506, 0x0524, 0x0206] and length > 100:
                     if dtype in [0x00, 0x02]:  # Data blocks only (not signatures)
                         self._parse_cyclic_buffer_activities(val)
+                
+                elif tag in [0x0222, 0x0223]:
+                    self._parse_gnss(val, tag)
 
                 pos += 5 + length
                 continue

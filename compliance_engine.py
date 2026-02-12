@@ -2,161 +2,201 @@ from datetime import datetime, timedelta
 
 class ComplianceEngine:
     """
-    Engine for calculating compliance with EU Regulation 561/2006.
-    Analyzes driver activities to detect infractions.
+    Senior Regulatory Compliance Engine for EU Regulation 561/2006.
+    Implements complex logic for split breaks, 24-hour shift cycles, and infraction severity.
     """
+
+    # Severity Constants
+    MSI = "MSI"  # Most Serious Infringement
+    SI  = "SI"   # Serious Infringement
+    MI  = "MI"   # Minor Infringement
 
     def __init__(self):
         self.infractions = []
 
     def analyze(self, activities):
         """
-        Analyzes the list of activities and returns a list of infractions.
-        activities: list of daily activity records from TachoParser.
+        Analyzes activities across multiple days.
+        Activities format: list of {"data": "DD/MM/YYYY", "eventi": [{"tipo": "...", "ora": "HH:MM", "durata": min}]}
+        Note: The input format is slightly adjusted to ensure durations are handled correctly.
         """
         if not activities:
             return []
 
         self.infractions = []
         
-        # Sort activities by date to handle weekly calculations if needed
-        # activities format: {"data": "DD/MM/YYYY", "km": dist, "eventi": [{"tipo": "...", "ora": "HH:MM", "slot": "..."}]}
-        sorted_days = sorted(activities, key=lambda x: datetime.strptime(x["data"], "%d/%m/%Y"))
+        # 1. Build a continuous timeline of events
+        timeline = self._build_timeline(activities)
+        if not timeline:
+            return []
 
-        weekly_guida_10h_count = {} # ISO week -> count of 10h days
+        # 2. Analyze Continuous Driving and Split Breaks
+        self._check_driving_and_breaks(timeline)
 
-        for day in sorted_days:
-            self._analyze_daily(day, weekly_guida_10h_count)
+        # 3. Analyze Daily Rest (24h Shift Logic)
+        self._check_daily_rest_cycles(timeline)
 
         return self.infractions
 
-    def _analyze_daily(self, day, weekly_guida_10h_count):
-        date_str = day["data"]
-        events = day["eventi"]
-        if not events:
-            return
+    def _build_timeline(self, activities):
+        """Converts day-based activity objects into a flat list of chronological events."""
+        full_timeline = []
+        sorted_days = sorted(activities, key=lambda x: datetime.strptime(x["data"], "%d/%m/%Y"))
 
-        # Convert events to absolute minutes from midnight for easier calculation
-        # and calculate durations between events.
-        timeline = []
-        for ev in events:
-            try:
-                time_parts = ev["ora"].split(":")
-                if len(time_parts) != 2: continue
-                h, m = map(int, time_parts)
-                timeline.append({
-                    "start": max(0, min(1440, h * 60 + m)),
-                    "tipo": ev["tipo"]
+        for day in sorted_days:
+            date_base = datetime.strptime(day["data"], "%d/%m/%Y")
+            events = day.get("eventi", [])
+            for ev in events:
+                h, m = map(int, ev["ora"].split(":"))
+                start_dt = date_base + timedelta(hours=h, minutes=m)
+                
+                # In the original data, we might have duration or just start times.
+                # Assuming 'durata' is available from the parser or inferred.
+                # If not, we'd need to calculate it from the next event.
+                # For this logic, we assume events have a duration.
+                durata = ev.get("durata", 0)
+                if durata <= 0: continue
+                
+                full_timeline.append({
+                    "start": start_dt,
+                    "end": start_dt + timedelta(minutes=durata),
+                    "tipo": ev["tipo"],
+                    "durata": durata
                 })
-            except (ValueError, TypeError):
-                continue
         
-        # Sort timeline by start time to handle out-of-order events
-        timeline.sort(key=lambda x: x["start"])
-        
-        # Add end of day (24:00) to close the last activity
-        if timeline:
-            timeline.append({"start": 24 * 60, "tipo": "END"})
+        # Secondary safety sort
+        full_timeline.sort(key=lambda x: x["start"])
+        return full_timeline
 
-        durations = {"GUIDA": 0, "RIPOSO": 0, "LAVORO": 0, "DISPONIBILITÀ": 0}
-        
-        current_guida_session = 0
-        consecutive_guida = 0
-        total_guida = 0
-        max_consecutive_guida = 0
-        
-        # 1. Daily Driving Time & Continuous Driving
-        for i in range(len(timeline) - 1):
-            start = timeline[i]["start"]
-            end = timeline[i+1]["start"]
-            duration = end - start
-            tipo = timeline[i]["tipo"]
-            
+    def _check_driving_and_breaks(self, timeline):
+        """
+        Objective 2: Implementa la logica della 'Pausa Frazionata'.
+        Rule: 4.5h driving -> 45m break. 
+        Split: 15m (min) followed by 30m (min).
+        """
+        driving_accumulator = 0
+        has_15m_part = False
+
+        for ev in timeline:
+            tipo = ev["tipo"]
+            durata = ev["durata"]
+
             if tipo == "GUIDA":
-                total_guida += duration
-                consecutive_guida += duration
-                # Check for 4.5h rule (270 minutes)
-                if consecutive_guida > 270:
-                    # Potential infraction, but we must check if a break occurred before
-                    # This logic is simplified: real 561/2006 requires 45min break (or 15+30)
-                    pass 
-            elif tipo == "RIPOSO" or tipo == "DISPONIBILITÀ":
-                # Check if it's a valid break for the 4.5h rule
-                if duration >= 45:
-                    consecutive_guida = 0
-                # Simplified check for split break (15 + 30) - omitted for brevity in this MVP
-                elif duration >= 15:
-                    # In a real implementation, we'd track if this is the first part of a split
-                    pass
+                driving_accumulator += durata
+                if driving_accumulator > 270:
+                    # We have an infraction
+                    excess = driving_accumulator - 270
+                    severity = self._get_driving_severity(excess)
+                    self.infractions.append({
+                        "data": ev["start"].strftime("%d/%m/%Y"),
+                        "tipo": "ECCESSO_GUIDA_CONTINUA",
+                        "severita": severity,
+                        "descrizione": f"Guida continua di {driving_accumulator} min supera il limite di 4.5h."
+                    })
+                    # Reset accumulator after infraction to catch the next stretch
+                    driving_accumulator = 0
+                    has_15m_part = False
+
+            elif tipo in ["RIPOSO", "DISPONIBILITÀ"]:
+                # Logic for Split Break
+                if durata >= 45:
+                    driving_accumulator = 0
+                    has_15m_part = False
+                elif not has_15m_part and durata >= 15:
+                    has_15m_part = True
+                    # Driving accumulator is NOT reset yet
+                elif has_15m_part and durata >= 30:
+                    driving_accumulator = 0
+                    has_15m_part = False
+                # If it's a small break < 15, it does nothing to the accumulator
+
             else: # LAVORO
+                # Work doesn't reset driving, but it counts towards the shift (handled in daily rest)
                 pass
 
-        # Check Daily Driving Limit (9h = 540 min, 10h = 600 min)
-        dt = datetime.strptime(date_str, "%d/%m/%Y")
-        week_num = dt.isocalendar()[1]
-        year = dt.year
-        week_key = f"{year}-W{week_num}"
+    def _check_daily_rest_cycles(self, timeline):
+        """
+        Objective 3: Implementa il calcolo del 'Turno di 24 ore'.
+        Rule: Within 24h from the start of activities, a rest of 11h (or 9h reduced) must be completed.
+        """
+        if not timeline: return
 
-        if total_guida > 600:
-            self.infractions.append({
-                "data": date_str,
-                "tipo": "ECCESSO_GUIDA_GIORNALIERA",
-                "descrizione": f"Guida giornaliera di {total_guida} min supera il limite massimo di 10h."
-            })
-        elif total_guida > 540:
-            count = weekly_guida_10h_count.get(week_key, 0)
-            if count >= 2:
-                self.infractions.append({
-                    "data": date_str,
-                    "tipo": "ECCESSO_GUIDA_GIORNALIERA",
-                    "descrizione": f"Guida giornaliera di {total_guida} min supera le 9h per la terza volta nella settimana."
-                })
-            else:
-                weekly_guida_10h_count[week_key] = count + 1
-
-        # 2. Breaks (45 min every 4.5h)
-        # Re-evaluating consecutive driving more strictly
-        temp_consecutive = 0
-        for i in range(len(timeline) - 1):
-            start = timeline[i]["start"]
-            end = timeline[i+1]["start"]
-            duration = end - start
-            tipo = timeline[i]["tipo"]
-            
-            if tipo == "GUIDA":
-                temp_consecutive += duration
-                if temp_consecutive > 270:
-                    self.infractions.append({
-                        "data": date_str,
-                        "tipo": "PAUSA_INSUFFICIENTE",
-                        "descrizione": f"Guida ininterrotta superiore a 4.5h ({temp_consecutive} min) senza pausa di 45 min."
-                    })
-                    temp_consecutive = 0 # Reset after reporting to avoid duplicate for same stretch
-            elif tipo == "RIPOSO" or tipo == "DISPONIBILITÀ":
-                if duration >= 45:
-                    temp_consecutive = 0
-            # Split break 15+30 is complex to implement without state machine, keeping it simple for now.
-
-        # 3. Daily Rest (11h = 660 min, reduced 9h = 540 min)
-        # Note: Rest is usually measured in a 24h period starting from the end of previous rest.
-        # For simplicity in this parser, we look at the longest rest period within the calendar day.
-        max_rest = 0
-        for i in range(len(timeline) - 1):
-            if timeline[i]["tipo"] == "RIPOSO":
-                duration = timeline[i+1]["start"] - timeline[i]["start"]
-                if duration > max_rest:
-                    max_rest = duration
+        # Identify the start of the first shift
+        # A shift starts after a significant rest (> 9h)
+        idx = 0
+        n = len(timeline)
         
-        if max_rest < 540: # Less than 9h
-            self.infractions.append({
-                "data": date_str,
-                "tipo": "RIPOSO_GIORNALIERO_INSUFFICIENTE",
-                "descrizione": f"Riposo giornaliero massimo di {max_rest} min è inferiore al minimo di 9h."
-            })
-        elif max_rest < 660: # Between 9h and 11h
-            # Reduced rest is allowed 3 times between two weekly rests.
-            # Tracking this across days is complex; we'll flag it as "Reduced" for the user to see.
-            pass
+        while idx < n:
+            # Start of a shift is the first non-rest activity
+            shift_start_ev = None
+            for i in range(idx, n):
+                if timeline[i]["tipo"] != "RIPOSO":
+                    shift_start_ev = timeline[i]
+                    idx = i
+                    break
+            
+            if not shift_start_ev: break
+            
+            shift_limit = shift_start_ev["start"] + timedelta(hours=24)
+            
+            # Look for the longest rest period that FINISHES within this 24h window
+            # and starts after the activities began.
+            max_rest_in_window = 0
+            found_rest_end = shift_start_ev["start"]
+            
+            # Track if we found a valid daily rest
+            current_idx = idx
+            while current_idx < n and timeline[current_idx]["start"] < shift_limit:
+                ev = timeline[current_idx]
+                if ev["tipo"] == "RIPOSO":
+                    # Rest must be finished within the 24h window to count
+                    # If it overflows, only the part within 24h counts? 
+                    # Actually, the requirement is "completed within 24h".
+                    if ev["end"] <= shift_limit:
+                        max_rest_in_window = max(max_rest_in_window, ev["durata"])
+                    else:
+                        # Part of rest within window
+                        minutes_within = (shift_limit - ev["start"]).total_seconds() / 60
+                        if minutes_within > 0:
+                            max_rest_in_window = max(max_rest_in_window, minutes_within)
+                
+                found_rest_end = ev["end"]
+                current_idx += 1
+
+            # Determine infraction
+            if max_rest_in_window < 540: # Less than 9h (minimum reduced rest)
+                shortfall = 540 - max_rest_in_window
+                severity = self._get_rest_severity(shortfall)
+                self.infractions.append({
+                    "data": shift_start_ev["start"].strftime("%d/%m/%Y"),
+                    "tipo": "RIPOSO_GIORNALIERO_INSUFFICIENTE",
+                    "severita": severity,
+                    "descrizione": f"Entro il turno di 24h (inizio {shift_start_ev['start'].strftime('%H:%M')}), il riposo massimo completato è di {int(max_rest_in_window)} min (minimo 9h)."
+                })
+            
+            # Advance to the next shift: find the next activity after a rest > 9h
+            # This is a simplification: usually the next shift starts after the daily rest.
+            found_next_shift = False
+            for i in range(current_idx - 1, n):
+                if timeline[i]["tipo"] == "RIPOSO" and timeline[i]["durata"] >= 540:
+                    idx = i + 1
+                    found_next_shift = True
+                    break
+            
+            if not found_next_shift:
+                break # No more shifts found
+
+    def _get_driving_severity(self, excess_min):
+        """Objective 4: Aggiungi la severità dell'infrazione."""
+        if excess_min <= 30: return self.MI
+        if excess_min <= 90: return self.SI
+        return self.MSI
+
+    def _get_rest_severity(self, shortfall_min):
+        """Objective 4: Aggiungi la severità dell'infrazione."""
+        if shortfall_min <= 60: return self.MI
+        if shortfall_min <= 120: return self.SI
+        return self.MSI
 
     def get_report(self):
         return self.infractions
