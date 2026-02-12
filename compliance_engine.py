@@ -40,11 +40,19 @@ class ComplianceEngine:
         # and calculate durations between events.
         timeline = []
         for ev in events:
-            h, m = map(int, ev["ora"].split(":"))
-            timeline.append({
-                "start": h * 60 + m,
-                "tipo": ev["tipo"]
-            })
+            try:
+                time_parts = ev["ora"].split(":")
+                if len(time_parts) != 2: continue
+                h, m = map(int, time_parts)
+                timeline.append({
+                    "start": max(0, min(1440, h * 60 + m)),
+                    "tipo": ev["tipo"]
+                })
+            except (ValueError, TypeError):
+                continue
+        
+        # Sort timeline by start time to handle out-of-order events
+        timeline.sort(key=lambda x: x["start"])
         
         # Add end of day (24:00) to close the last activity
         if timeline:
