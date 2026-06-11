@@ -58,10 +58,21 @@ class TestBorderCrossingDecode(unittest.TestCase):
         self.assertFalse(decode_geo_coordinates(b"\xff" * 6, 0)["fix"])
 
     def test_specific_condition(self):
-        rec = (1741000000).to_bytes(4, "big") + bytes([0x00])
-        out = decode_specific_condition(rec)
-        self.assertEqual(out["condition"], "Ferry")
-        self.assertIsNotNone(out["timestamp"])
+        # Annex 1C §2.154: 0x01/0x02 = Out of scope Begin/End,
+        # 0x03/0x04 = Ferry/Train crossing Begin/End, 0x00 = RFU.
+        cases = {
+            0x00: "RFU",
+            0x01: "OutOfScope Begin",
+            0x02: "OutOfScope End",
+            0x03: "Ferry/Train Begin",
+            0x04: "Ferry/Train End",
+        }
+        for code, label in cases.items():
+            rec = (1741000000).to_bytes(4, "big") + bytes([code])
+            out = decode_specific_condition(rec)
+            self.assertEqual(out["condition"], label)
+            self.assertEqual(out["type_code"], code)
+            self.assertIsNotNone(out["timestamp"])
 
 
 @requires_real_files
@@ -84,7 +95,7 @@ class TestRealFileRecovery(unittest.TestCase):
         ):
             with self.subTest(file=name):
                 r = TachoParser(_path(name)).parse()
-                events = sum(len(a.get("eventi", [])) for a in r.get("activities", []))
+                events = sum(len(a.get("changes", [])) for a in r.get("activities", []))
                 self.assertGreater(events, 100, "VU activity changes should be recovered")
 
     def test_record_arrays_summary_present(self):

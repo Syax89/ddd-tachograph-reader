@@ -143,8 +143,33 @@ def build_g1_card_download():
 
 
 def build_g1_specific_conditions():
-    """EF Specific_Conditions (G1, Annex 1B §2.27): 5-byte records, no header."""
-    return struct.pack(">IB", ts(2025,4,12,14), 0x00) + struct.pack(">IB", ts(2025,4,12,18), 0x02)
+    """EF Specific_Conditions (Annex 1C §2.154): 5-byte records, no header.
+    0x01 = Out of scope Begin, 0x02 = Out of scope End."""
+    return struct.pack(">IB", ts(2025,4,12,14), 0x01) + struct.pack(">IB", ts(2025,4,12,18), 0x02)
+
+
+def build_g2_vehicle_units():
+    """EF VehicleUnits_Used (Annex 1C §2.39): pointer(2) + CardVehicleUnitRecord(10):
+    timeStamp(4) + manufacturerCode(1) + deviceID(1) + vuSoftwareVersion(4)."""
+    recs = b"".join(
+        struct.pack(">IBB", ts(2025, 5, 1 + d, 8), 0xA1, 0x00) + b"4072"
+        for d in range(3)
+    )
+    return struct.pack(">H", 2) + recs
+
+
+def build_g2_gnss_places():
+    """EF GNSS_Places (Annex 1C §2.78): pointer(2) + GNSSAccumulatedDrivingRecord(18):
+    timeStamp(4) + gnssPlaceRecord(11: ts(4)+accuracy(1)+lat(3)+lon(3)) + odometer(3).
+    Coordinates are ±DDMM.M ×10 signed int24 (45°04.1'N 9°12.5'E)."""
+    def coord(v):
+        return int(v).to_bytes(3, "big", signed=True)
+    recs = b""
+    for d in range(3):
+        t = ts(2025, 5, 1 + d, 12)
+        recs += (struct.pack(">I", t) + struct.pack(">I", t) + bytes([7])
+                 + coord(45041) + coord(9125) + (89000 + d).to_bytes(3, "big"))
+    return struct.pack(">H", 2) + recs
 
 
 def build_g2_icc():
@@ -173,22 +198,24 @@ def activities_week(base_date=(2025,5,1)):
 
 def generate_g1_card(out):
     acts = activities_week()
+    # Appendix dtype semantics (Annex 1C): 0x00 = G1 data, 0x01 = G1 signature
+    # (0x02/0x03 mark the Gen2 EF copies — a pure G1 card has none).
     recs = [
         (0x0002, 0x00, build_ef_icc()),
         (0x0005, 0x00, build_ef_ic()),
-        (0x0520, 0x02, build_g1_id()),
-        (0x0521, 0x02, build_g1_licence()),
-        (0x0501, 0x02, build_g1_app_id()),
-        (0x0504, 0x02, make_cyclic(acts)),
-        (0x0505, 0x02, build_g1_vehicles()),
-        (0x0506, 0x02, build_g1_places()),
-        (0x0507, 0x02, build_g1_current_usage()),
-        (0x0508, 0x02, build_g1_controls()),
-        (0x050C, 0x01, build_g1_calibrations()),
-        (0x050E, 0x02, build_g1_card_download()),
-        (0x0522, 0x02, build_g1_specific_conditions()),
-        (0x0502, 0x02, build_g1_events()),
-        (0x0503, 0x02, build_g1_faults()),
+        (0x0520, 0x00, build_g1_id()),
+        (0x0521, 0x00, build_g1_licence()),
+        (0x0501, 0x00, build_g1_app_id()),
+        (0x0504, 0x00, make_cyclic(acts)),
+        (0x0505, 0x00, build_g1_vehicles()),
+        (0x0506, 0x00, build_g1_places()),
+        (0x0507, 0x00, build_g1_current_usage()),
+        (0x0508, 0x00, build_g1_controls()),
+        (0x050C, 0x00, build_g1_calibrations()),
+        (0x050E, 0x00, build_g1_card_download()),
+        (0x0522, 0x00, build_g1_specific_conditions()),
+        (0x0502, 0x00, build_g1_events()),
+        (0x0503, 0x00, build_g1_faults()),
         (0xC100, 0x01, b'\x00' * 194),
         (0xC108, 0x01, b'\x00' * 194),
     ]
@@ -220,27 +247,28 @@ def generate_g1_vu(out):
 
 def generate_g2_card(out):
     acts = activities_week()
-    inner = b"".join([
-        b'\x00\x02',
+    # Real G2 card downloads are flat STAP streams (no 0x76 VU wrapper); the
+    # Gen2 EF copies carry appendix dtype 0x02 (data) / 0x03 (signature).
+    data = b"".join([
         stap(0x0101, 0x00, build_g2_icc()),
-        stap(0x0102, 0x00, build_g2_card_id()),
-        stap(0x0201, 0x00, build_g2_driver()),
-        stap(0x0524, 0x02, make_cyclic(acts)),
-        stap(0x0523, 0x02, build_g1_vehicles()),
+        stap(0x0102, 0x02, build_g2_card_id()),
+        stap(0x0201, 0x02, build_g2_driver()),
+        stap(0x0504, 0x02, make_cyclic(acts)),
+        stap(0x0505, 0x02, build_g1_vehicles()),
+        stap(0x0523, 0x02, build_g2_vehicle_units()),
+        stap(0x0524, 0x02, build_g2_gnss_places()),
         stap(0x0506, 0x02, build_g1_places()),
-        stap(0x050C, 0x01, build_g1_calibrations()),
+        stap(0x050C, 0x02, build_g1_calibrations()),
         stap(0x0522, 0x02, build_g1_specific_conditions()),
         stap(0x0502, 0x02, build_g1_events()),
         stap(0x0503, 0x02, build_g1_faults()),
-        stap(0x0103, 0x01, b'\x00' * 200),
-        stap(0x0104, 0x01, b'\x00' * 200),
+        stap(0x0103, 0x03, b'\x00' * 200),
+        stap(0x0104, 0x03, b'\x00' * 200),
         stap(0x2020, 0x02, s("TRASPORTI SRL", 64)),
         stap(0x0100, 0x02, s("I000000000001  TRASPORTI SRL", 64)),
         stap(0x0508, 0x02, build_g1_controls()),
         stap(0x050E, 0x02, build_g1_card_download()),
-        stap(0x0505, 0x02, build_g1_vehicles()),
     ])
-    data = stap(0x7621, 0x00, inner)
     with open(out, "wb") as f:
         f.write(data)
     print(f"  G2 Card: {os.path.basename(out)} ({len(data):,} bytes)")
@@ -249,13 +277,10 @@ def generate_g2_card(out):
 # ─── G2 VU ───
 
 def generate_g2_vu(out):
-    acts = activities_week()
     inner = bytearray(b'\x00\x02')
     for tag in [0x0509, 0x050A, 0x050B, 0x050D, 0x050F, 0x0510, 0x0511, 0x0512]:
         sizes = {0x0509: 29, 0x050A: 28, 0x050B: 8, 0x050D: 30, 0x050F: 25, 0x0510: 24, 0x0511: 20, 0x0512: 23}
         inner.extend(stap(tag, 0x02, b'\x00' * sizes[tag]))
-    inner.extend(stap(0x0524, 0x02, make_cyclic(acts)))
-    inner.extend(stap(0x0523, 0x02, build_g1_vehicles()))
     inner.extend(stap(0x0502, 0x02, build_g1_events()))
     inner.extend(stap(0x0503, 0x02, build_g1_faults()))
     inner.extend(stap(0x050C, 0x01, build_g1_calibrations()))
@@ -274,29 +299,31 @@ def generate_g22_card(out):
     gnss = b""
     for d in range(7):
         gnss += struct.pack(">IiiHH", ts(2025,5,1+d,12), int(45.4642*1e7), int(9.19*1e7), 85, 180)
-    inner = b"".join([
-        b'\x00\x02',
+    # Real G2.2 card downloads are flat STAP streams; the G2.2-only EFs
+    # (0x0525-0x052A) plus dtype 0x02/0x03 mark the file as Gen2v2.
+    data = b"".join([
         stap(0x0101, 0x00, build_g2_icc()),
-        stap(0x0102, 0x00, build_g2_card_id()),
-        stap(0x0201, 0x00, build_g2_driver()),
-        stap(0x0524, 0x02, make_cyclic(acts)),
+        stap(0x0102, 0x02, build_g2_card_id()),
+        stap(0x0201, 0x02, build_g2_driver()),
+        stap(0x0504, 0x02, make_cyclic(acts)),
         stap(0x0525, 0x02, gnss),
         stap(0x0526, 0x02, struct.pack(">IBii", ts(2025,5,2,10), 0, int(45.4642*1e7), int(9.19*1e7))),
         stap(0x0527, 0x02, struct.pack(">IB", ts(2025,5,1,8), get_nation_byte()) + s("AB12345CD", 14) + b'\x00' * 7),
         stap(0x0528, 0x02, struct.pack(">IiiBB", ts(2025,5,1,8), int(45.4642*1e7), int(9.19*1e7), 0x01, get_nation_byte())),
         stap(0x0529, 0x02, struct.pack(">IHHH", ts(2025,5,2,14), 5000, 7000, 12000)),
         stap(0x052A, 0x02, struct.pack(">IBBii", ts(2025,5,3,18), get_nation_byte(), get_nation_byte("F"), int(44.5*1e7), int(7.0*1e7))),
-        stap(0x0523, 0x02, build_g1_vehicles()),
+        stap(0x0505, 0x02, build_g1_vehicles()),
+        stap(0x0523, 0x02, build_g2_vehicle_units()),
+        stap(0x0524, 0x02, build_g2_gnss_places()),
         stap(0x0506, 0x02, build_g1_places()),
-        stap(0x050C, 0x01, build_g1_calibrations()),
+        stap(0x050C, 0x02, build_g1_calibrations()),
         stap(0x0502, 0x02, build_g1_events()),
         stap(0x0503, 0x02, build_g1_faults()),
-        stap(0x0103, 0x01, b'\x00' * 200),
-        stap(0x0104, 0x01, b'\x00' * 200),
+        stap(0x0103, 0x03, b'\x00' * 200),
+        stap(0x0104, 0x03, b'\x00' * 200),
         stap(0x2020, 0x02, s("TRASPORTI SRL", 64)),
         stap(0x0100, 0x02, s("I000000000001  TRASPORTI SRL", 64)),
     ])
-    data = stap(0x7631, 0x00, inner)
     with open(out, "wb") as f:
         f.write(data)
     print(f"  G2.2 Card: {os.path.basename(out)} ({len(data):,} bytes)")
