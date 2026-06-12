@@ -75,7 +75,6 @@ class TestBorderCrossingDecode(unittest.TestCase):
             self.assertIsNotNone(out["timestamp"])
 
 
-@requires_real_files
 class TestDetailedSpeedFold(unittest.TestCase):
     def test_speed_blocks_folded_from_recordarray(self):
         # Synthetic 0x7634 (Detailed speed) section: one 0x12 RecordArray with
@@ -99,6 +98,7 @@ class TestDetailedSpeedFold(unittest.TestCase):
         self.assertTrue(blocks[0]["begin"].startswith("2025-06-30"))
 
 
+@requires_real_files
 class TestRealFileRecovery(unittest.TestCase):
     """These G2.2 files contain data the legacy heuristic dropped."""
 
